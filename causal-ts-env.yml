@@ -1,0 +1,18 @@
+name: causal-tf-env
+channels:
+- defaults
+- conda-forge
+dependencies:
+- nb_conda
+- matplotlib
+- pandas
+- xlrd
+- scikit-learn
+- matplotlib
+- seaborn
+- tqdm
+- pip
+- pip:
+  - tensorflow
+  - tensorflow-probability
+  - tfcausalimpact
