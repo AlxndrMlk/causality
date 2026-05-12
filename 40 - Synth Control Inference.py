@@ -534,4 +534,67 @@ def _validate_coverage_sim():
 _validate_coverage_sim()
 
 # %% [markdown]
+# ### Full coverage simulation
+#
+# R=2000 reps across tau in {0.0, 0.5, 1.0, 2.0}, parallelized.
+# Cached to disk so re-execution of the notebook is fast.
+
+# %%
+import os
+
+CACHE_PATH = "coverage_sim_results.parquet"
+
+if os.path.exists(CACHE_PATH):
+    cov_df = pd.read_parquet(CACHE_PATH)
+    print(f"Loaded cached coverage_sim from {CACHE_PATH} (rows={len(cov_df)})")
+else:
+    cov_df = coverage_sim(R=2000, taus=(0.0, 0.5, 1.0, 2.0), alpha=0.05, n_jobs=-1)
+    cov_df.to_parquet(CACHE_PATH)
+    print(f"Saved coverage_sim to {CACHE_PATH} (rows={len(cov_df)})")
+
+# %% [markdown]
+# ### Size and power table (Abadie p-value)
+
+# %%
+abadie = cov_df[cov_df["method"] == "abadie_p"].copy()
+# `covered` is True when p > alpha (failed to reject). reject_rate = 1 - mean(covered).
+size_power = abadie.groupby("tau")["covered"].agg(
+    n="size",
+    accept_rate="mean",
+).assign(
+    reject_rate=lambda d: 1 - d["accept_rate"],
+    se_reject=lambda d: np.sqrt(d["reject_rate"] * (1 - d["reject_rate"]) / d["n"]),
+)[["n", "reject_rate", "se_reject"]]
+print("Abadie p-value rejection rate by tau (alpha = 0.05):")
+print(size_power.round(4))
+
+# %% [markdown]
+# ### Coverage table (CI methods)
+
+# %%
+cis = cov_df[cov_df["method"].isin({"test_inversion", "conformal"})].copy()
+coverage = cis.groupby(["method", "tau"])["covered"].agg(
+    n="size",
+    coverage="mean",
+).assign(
+    se=lambda d: np.sqrt(d["coverage"] * (1 - d["coverage"]) / d["n"]),
+)[["n", "coverage", "se"]]
+print("Empirical coverage by method and tau (target = 0.95):")
+print(coverage.round(4))
+
+# %%
+fig, ax = plt.subplots(figsize=(7, 4.5))
+for method, sub in coverage.reset_index().groupby("method"):
+    ax.errorbar(sub["tau"], sub["coverage"], yerr=2 * sub["se"],
+                marker="o", capsize=3, label=method)
+ax.axhline(0.95, color="black", ls="--", lw=1, label="nominal 0.95")
+ax.set_xlabel("true tau")
+ax.set_ylabel("empirical coverage")
+ax.set_title("Coverage of synth-control CIs (R=2000, alpha=0.05)")
+ax.set_ylim(0.80, 1.02)
+ax.legend()
+fig.tight_layout()
+plt.show()
+
+# %% [markdown]
 # ## 7. Discussion
