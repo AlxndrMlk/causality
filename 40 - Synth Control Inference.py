@@ -115,6 +115,68 @@ _validate_simulate_panel()
 # %% [markdown]
 # ## 3. SC estimator
 
+# %%
+def fit_sc(df, treated_id, T0):
+    """Abadie SC matching on lagged outcomes only.
+    Solve simplex-constrained QP for donor weights W via cvxpy/OSQP.
+    Returns dict with gap (pd.Series, length T), yhat (pd.Series), W (pd.Series).
+    """
+    wide = df.pivot(index="time", columns="unit", values="y").sort_index()
+    times = wide.index.to_numpy()
+    donor_ids = [u for u in wide.columns if u != treated_id]
+    y_treated = wide[treated_id].to_numpy()
+    Y_donors = wide[donor_ids].to_numpy()
+    J = Y_donors.shape[1]
+
+    pre_mask = times < T0
+    y1_pre = y_treated[pre_mask]
+    Y0_pre = Y_donors[pre_mask, :]
+
+    W_var = cp.Variable(J, nonneg=True)
+    objective = cp.Minimize(cp.sum_squares(y1_pre - Y0_pre @ W_var))
+    cp.Problem(objective, [cp.sum(W_var) == 1]).solve(solver=cp.OSQP)
+    W_val = np.clip(W_var.value, 0.0, None)
+    W_val = W_val / W_val.sum()
+
+    yhat_full = Y_donors @ W_val
+    gap_full = y_treated - yhat_full
+
+    return {
+        "gap":  pd.Series(gap_full,  index=times, name="gap"),
+        "yhat": pd.Series(yhat_full, index=times, name="yhat"),
+        "W":    pd.Series(W_val,     index=donor_ids, name="W"),
+    }
+
+
+# %% [markdown]
+# ### Validation: fit_sc
+
+# %%
+def _validate_fit_sc():
+    df, _ = simulate_panel(J=30, T=40, T0=30, sigma=0.0, tau=0.0, seed=11)
+    out = fit_sc(df, treated_id=0, T0=30)
+    assert set(out.keys()) == {"gap", "W", "yhat"}
+    assert isinstance(out["gap"], pd.Series)
+    assert isinstance(out["W"], pd.Series)
+    assert isinstance(out["yhat"], pd.Series)
+    assert len(out["gap"]) == 40
+    assert len(out["yhat"]) == 40
+    assert len(out["W"]) == 30
+    assert (out["W"] >= -1e-8).all()
+    np.testing.assert_allclose(out["W"].sum(), 1.0, atol=1e-6)
+    assert list(out["W"].index) == list(range(1, 31))
+    pre_gap = out["gap"].iloc[:30]
+    assert np.abs(pre_gap).max() < 1e-4, f"pre-period gap too large: {np.abs(pre_gap).max()}"
+    post_gap = out["gap"].iloc[30:]
+    assert np.abs(post_gap).max() < 1e-3, f"post-period gap too large: {np.abs(post_gap).max()}"
+
+    df2, _ = simulate_panel(J=30, T=40, T0=30, sigma=0.3, tau=2.0, seed=11)
+    out2 = fit_sc(df2, treated_id=0, T0=30)
+    assert 1.0 < out2["gap"].iloc[30:].mean() < 3.0
+    print("fit_sc OK")
+
+_validate_fit_sc()
+
 # %% [markdown]
 # ## 4. Phase I — Abadie p-values
 
