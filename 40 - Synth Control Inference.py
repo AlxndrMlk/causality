@@ -365,6 +365,99 @@ ci_inv = test_inversion_ci(df_worked, T0=30, treated_id=0, alpha=0.10, n_grid=51
 print(f"Test-inversion 90% CI: [{ci_inv['ci_lo']:+.3f}, {ci_inv['ci_hi']:+.3f}]  "
       f"(tau_hat = {ci_inv['tau_hat']:+.3f})")
 
+# %%
+def _moving_block_pvalue(residuals, T0, q=1):
+    """Chernozhukov-Wuthrich-Zhu moving-block permutation test.
+
+    Statistic: S_q(window) = (mean over window of |u_t|^q)^(1/q).
+    P-value = rank of actual post-period statistic among all length-T1
+    windows in the residual series, including the actual one.
+    """
+    T = len(residuals)
+    T1 = T - T0  # post-period length
+    if T1 <= 0:
+        raise ValueError("post-period must be non-empty")
+    res = np.asarray(residuals)
+
+    def Sq(window):
+        return float(np.mean(np.abs(window) ** q) ** (1.0 / q))
+
+    s_actual = Sq(res[T0:T0 + T1])
+    starts = np.arange(0, T - T1 + 1)
+    s_all = np.array([Sq(res[s:s + T1]) for s in starts])
+    return float((s_all >= s_actual).sum()) / float(len(s_all))
+
+
+def conformal_ci(df, T0, treated_id, alpha=0.05, n_grid=51, grid=None, q=1):
+    """Conformal CI via moving-block permutation of SC residuals (CWZ 2021).
+
+    Fits SC on the FULL adjusted treated series (T0 = T for the fit) so
+    residuals are defined over all T periods.
+    """
+    out_obs = fit_sc(df, treated_id=treated_id, T0=T0)
+    tau_hat = float(out_obs["gap"].iloc[T0:].mean())
+    gaps_obs = placebo_distribution(df, T0=T0)
+    placebo_means = gaps_obs.iloc[T0:].mean(axis=0).drop(treated_id)
+    sigma_placebo = float(placebo_means.std(ddof=1))
+    if grid is None:
+        half_width = max(4.0 * sigma_placebo, 1e-3)
+        grid = np.linspace(tau_hat - half_width, tau_hat + half_width, n_grid)
+    else:
+        grid = np.asarray(sorted(grid))
+
+    T = df["time"].nunique()
+    pvalues = np.empty(len(grid))
+    for k, tau0 in enumerate(grid):
+        df_adj = df.copy()
+        mask = (df_adj["unit"] == treated_id) & (df_adj["time"] >= T0)
+        df_adj.loc[mask, "y"] = df_adj.loc[mask, "y"] - tau0
+        out_full = fit_sc(df_adj, treated_id=treated_id, T0=T)  # full-T fit
+        residuals = out_full["gap"].to_numpy()
+        pvalues[k] = _moving_block_pvalue(residuals, T0=T0, q=q)
+
+    in_ci = pvalues > alpha
+    if not in_ci.any():
+        ci_lo = ci_hi = float("nan")
+    else:
+        ci_lo = float(grid[in_ci].min())
+        ci_hi = float(grid[in_ci].max())
+
+    return {"ci_lo": ci_lo, "ci_hi": ci_hi,
+            "tau_grid": grid, "pvalues": pvalues}
+
+
+# %% [markdown]
+# ### Validation: conformal_ci
+
+# %%
+def _validate_conformal():
+    df, _ = simulate_panel(J=15, T=30, T0=20, sigma=0.3, tau=1.0, seed=9)
+    ci = conformal_ci(df, T0=20, treated_id=0, alpha=0.10, n_grid=15, q=1)
+    assert set(ci.keys()) >= {"ci_lo", "ci_hi", "tau_grid", "pvalues"}
+    assert len(ci["tau_grid"]) == 15
+    n_windows = 30 - 10 + 1  # T - T1 + 1 = 21
+    assert (ci["pvalues"] >= 1 / n_windows - 1e-12).all()
+    assert (ci["pvalues"] <= 1.0 + 1e-12).all()
+    assert not np.isnan(ci["ci_lo"]) and not np.isnan(ci["ci_hi"])
+    assert ci["ci_lo"] <= ci["ci_hi"]
+    print("conformal_ci OK")
+
+_validate_conformal()
+
+# %% [markdown]
+# Apply conformal CI to the worked panel and compare with test-inversion:
+
+# %%
+ci_conf = conformal_ci(df_worked, T0=30, treated_id=0, alpha=0.10, n_grid=51, q=1)
+print(f"Test-inversion 90% CI: [{ci_inv['ci_lo']:+.3f}, {ci_inv['ci_hi']:+.3f}]")
+print(f"Conformal      90% CI: [{ci_conf['ci_lo']:+.3f}, {ci_conf['ci_hi']:+.3f}]")
+
+# %% [markdown]
+# The two intervals may legitimately disagree because they rest on different
+# exchangeability assumptions — donor units exchangeable with treated under the
+# null (test-inversion) vs. residual blocks exchangeable across time (conformal)
+# — not because one is "wrong."
+
 # %% [markdown]
 # ## 6. Phase III — Coverage simulation
 
