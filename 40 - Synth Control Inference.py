@@ -180,6 +180,70 @@ _validate_fit_sc()
 # %% [markdown]
 # ## 4. Phase I — Abadie p-values
 
+# %%
+def rmspe_ratio(gap, T0):
+    """Post/pre RMSPE ratio. Pre-RMSPE in the denominator penalizes badly-fit donors."""
+    pre = gap.iloc[:T0].to_numpy()
+    post = gap.iloc[T0:].to_numpy()
+    pre_rmspe = float(np.sqrt(np.mean(pre ** 2)))
+    post_rmspe = float(np.sqrt(np.mean(post ** 2)))
+    if pre_rmspe == 0.0:
+        return np.inf
+    return post_rmspe / pre_rmspe
+
+
+def placebo_distribution(df, T0):
+    """Refit SC with each unit as 'treated' in turn. Returns wide DataFrame
+    (index=time, columns=unit) of gap series."""
+    units = sorted(df["unit"].unique())
+    gaps = {j: fit_sc(df, treated_id=j, T0=T0)["gap"] for j in units}
+    return pd.DataFrame(gaps).sort_index()
+
+
+def abadie_pvalue(ratios, treated_idx):
+    """One-sided exact rank p-value: p = #{j : r_j >= r_treated} / (J+1).
+    Numerator includes the treated unit, so p >= 1/(J+1) always. Ties counted (conservative).
+    """
+    r_t = ratios.loc[treated_idx]
+    return float((ratios >= r_t).sum()) / len(ratios)
+
+
+# %% [markdown]
+# ### Validation: placebo + rmspe_ratio + abadie_pvalue
+
+# %%
+def _validate_phase1():
+    # rmspe_ratio: known input
+    gap = pd.Series(np.array([0.1, -0.1, 0.1, -0.1, 2.0, 2.0]), index=np.arange(6))
+    r = rmspe_ratio(gap, T0=4)
+    expected = np.sqrt((4.0 + 4.0) / 2) / np.sqrt((0.01 * 4) / 4)  # = 2.0 / 0.1 = 20.0
+    np.testing.assert_allclose(r, expected, rtol=1e-10)
+
+    # abadie_pvalue: floor at 1/(J+1)
+    ratios = pd.Series([5.0, 1.0, 1.0, 1.0], index=[0, 1, 2, 3])
+    p = abadie_pvalue(ratios, treated_idx=0)
+    assert p == 1 / 4, f"expected 0.25, got {p}"
+    # Tie at the top: treated tied with one placebo -> count includes both
+    ratios_tie = pd.Series([2.0, 2.0, 1.0, 1.0], index=[0, 1, 2, 3])
+    p_tie = abadie_pvalue(ratios_tie, treated_idx=0)
+    assert p_tie == 2 / 4, f"expected 0.5, got {p_tie}"
+
+    # placebo_distribution: shape and column set
+    df, _ = simulate_panel(J=10, T=20, T0=15, sigma=0.3, tau=1.0, seed=3)
+    gaps = placebo_distribution(df, T0=15)
+    assert gaps.shape == (20, 11)
+    assert set(gaps.columns) == set(range(11))
+
+    # End-to-end on a panel with strong tau
+    df2, _ = simulate_panel(J=30, T=40, T0=30, sigma=0.3, tau=2.0, seed=5)
+    gaps2 = placebo_distribution(df2, T0=30)
+    ratios2 = gaps2.apply(lambda g: rmspe_ratio(g, T0=30))
+    p2 = abadie_pvalue(ratios2, treated_idx=0)
+    assert p2 <= 3 / 31, f"strong-effect p-value too large: {p2}"
+    print("Phase I OK")
+
+_validate_phase1()
+
 # %% [markdown]
 # ## 5. Phase II — Confidence intervals
 
