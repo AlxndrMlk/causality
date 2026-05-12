@@ -245,6 +245,59 @@ def _validate_phase1():
 _validate_phase1()
 
 # %% [markdown]
+# ### Worked example: one panel at tau=1
+#
+# Simulate one panel with a true treatment effect of tau=1, fit synthetic
+# control to every unit (treated + 30 placebos), compute the post/pre RMSPE
+# ratio for each, and report the Abadie rank p-value.
+
+# %%
+WORKED_PANEL_SEED = 42
+df_worked, truth_worked = simulate_panel(
+    J=30, T=40, T0=30, r=2, sigma=0.5, tau=1.0, seed=WORKED_PANEL_SEED,
+)
+
+gaps_worked = placebo_distribution(df_worked, T0=30)
+ratios_worked = gaps_worked.apply(lambda g: rmspe_ratio(g, T0=30))
+treated_id_worked = truth_worked["treated_id"]
+tau_hat = float(gaps_worked[treated_id_worked].iloc[30:].mean())
+r_treated = float(ratios_worked.loc[treated_id_worked])
+p_worked = abadie_pvalue(ratios_worked, treated_idx=treated_id_worked)
+
+print(f"Estimated tau (mean post-period gap): {tau_hat:+.3f}")
+print(f"Treated unit RMSPE ratio:              {r_treated:.3f}")
+print(f"Abadie one-sided p-value:              {p_worked:.4f}  (floor = {1/31:.4f})")
+
+# %%
+fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+ax = axes[0]
+for col in gaps_worked.columns:
+    if col == treated_id_worked:
+        continue
+    ax.plot(gaps_worked.index, gaps_worked[col], color="lightgrey", lw=0.8)
+ax.plot(gaps_worked.index, gaps_worked[treated_id_worked],
+        color="black", lw=2, label="Treated")
+ax.axvline(30, color="red", ls="--", lw=1, label="T0")
+ax.axhline(0, color="black", lw=0.5)
+ax.set_xlabel("time")
+ax.set_ylabel("gap (y - y_synth)")
+ax.set_title("Treated vs. placebo gap series")
+ax.legend(loc="upper left")
+
+ax = axes[1]
+placebo_ratios = ratios_worked.drop(treated_id_worked)
+ax.hist(placebo_ratios, bins=15, color="lightgrey", edgecolor="grey")
+ax.axvline(r_treated, color="black", lw=2, label=f"Treated r = {r_treated:.2f}")
+ax.set_xlabel("post/pre RMSPE ratio")
+ax.set_ylabel("count")
+ax.set_title("Placebo distribution of RMSPE ratio")
+ax.legend()
+
+fig.tight_layout()
+plt.show()
+
+# %% [markdown]
 # ## 5. Phase II — Confidence intervals
 
 # %% [markdown]
