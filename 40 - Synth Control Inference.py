@@ -598,3 +598,31 @@ plt.show()
 
 # %% [markdown]
 # ## 7. Discussion
+#
+# **Did the Abadie p-value hit nominal size?** Look at the rejection rate at tau=0
+# in the size/power table. With J=30 donors, the smallest possible p-value from
+# the rank-based test is 1/31 ≈ 0.032, and the test rejects at alpha=0.05 when
+# p ≤ 0.05. Under the null we expect the rejection rate to be close to 1/31
+# (the floor) ≈ 0.032, *not* 0.05 — the test is conservative because of grid
+# coarseness. Empirically you should see ~3% rejection at tau=0.
+#
+# **Power.** Rejection rate at tau in {0.5, 1.0, 2.0} should rise sharply.
+# At tau=2 (well above the noise scale sigma=0.5), power should be near 1.
+#
+# **Which CI was tighter?** Compare interval widths in the cached `cov_df` —
+# averaging `ci_hi - ci_lo` per method shows whether test-inversion or conformal
+# is more efficient under the well-specified inside-hull DGP.
+#
+# **Where does each method degrade?** Both methods rely on exchangeability
+# assumptions that this DGP satisfies (donors share the factor structure with
+# the treated unit; residuals from a correctly-specified factor fit are roughly
+# stationary). Misspecification scenarios — treated unit *outside* the convex
+# hull, heavy-tailed noise, or a structural break in the factors — are listed
+# in the spec's "Open follow-ups" and are the natural next experiments.
+#
+# **One caveat on identifiability.** With J=30 donors and r=2 latent factors,
+# the donor weights W are massively under-identified noiselessly: any face of
+# the simplex containing the treated unit's loading vector works. Inference
+# here doesn't need W to be unique — every test statistic is a function of
+# the gap series, which is invariant to the choice of W within the admissible
+# set. Don't read the bar plot of W as recovering "the true weights."
