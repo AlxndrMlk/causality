@@ -300,6 +300,71 @@ plt.show()
 # %% [markdown]
 # ## 5. Phase II — Confidence intervals
 
+# %%
+def test_inversion_ci(df, T0, treated_id, alpha=0.05, n_grid=51, grid=None):
+    """Test-inversion CI: sweep tau_0, subtract from treated post-period,
+    recompute Abadie p-value, keep tau_0 with p > alpha.
+    """
+    out_obs = fit_sc(df, treated_id=treated_id, T0=T0)
+    tau_hat = float(out_obs["gap"].iloc[T0:].mean())
+
+    gaps_obs = placebo_distribution(df, T0=T0)
+    placebo_means = gaps_obs.iloc[T0:].mean(axis=0).drop(treated_id)
+    sigma_placebo = float(placebo_means.std(ddof=1))
+
+    if grid is None:
+        half_width = max(4.0 * sigma_placebo, 1e-3)
+        grid = np.linspace(tau_hat - half_width, tau_hat + half_width, n_grid)
+    else:
+        grid = np.asarray(sorted(grid))
+
+    pvalues = np.empty(len(grid))
+    for k, tau0 in enumerate(grid):
+        df_adj = df.copy()
+        mask = (df_adj["unit"] == treated_id) & (df_adj["time"] >= T0)
+        df_adj.loc[mask, "y"] = df_adj.loc[mask, "y"] - tau0
+        gaps_adj = placebo_distribution(df_adj, T0=T0)
+        ratios_adj = gaps_adj.apply(lambda g: rmspe_ratio(g, T0=T0))
+        pvalues[k] = abadie_pvalue(ratios_adj, treated_idx=treated_id)
+
+    in_ci = pvalues > alpha
+    if not in_ci.any():
+        ci_lo = ci_hi = float("nan")
+    else:
+        ci_lo = float(grid[in_ci].min())
+        ci_hi = float(grid[in_ci].max())
+
+    return {"ci_lo": ci_lo, "ci_hi": ci_hi,
+            "tau_grid": grid, "pvalues": pvalues, "tau_hat": tau_hat}
+
+
+# %% [markdown]
+# ### Validation: test_inversion_ci
+
+# %%
+def _validate_test_inversion():
+    df, _ = simulate_panel(J=20, T=30, T0=20, sigma=0.3, tau=1.0, seed=8)
+    ci = test_inversion_ci(df, T0=20, treated_id=0, alpha=0.10, n_grid=21)
+    assert set(ci.keys()) >= {"ci_lo", "ci_hi", "tau_grid", "pvalues"}
+    assert len(ci["tau_grid"]) == 21
+    assert len(ci["pvalues"]) == 21
+    assert (np.diff(ci["tau_grid"]) > 0).all()
+    out = fit_sc(df, treated_id=0, T0=20)
+    tau_hat = float(out["gap"].iloc[20:].mean())
+    assert ci["ci_lo"] <= tau_hat <= ci["ci_hi"], \
+        f"tau_hat {tau_hat} not in CI [{ci['ci_lo']}, {ci['ci_hi']}]"
+    print("test_inversion_ci OK")
+
+_validate_test_inversion()
+
+# %% [markdown]
+# Apply test-inversion CI to the worked panel:
+
+# %%
+ci_inv = test_inversion_ci(df_worked, T0=30, treated_id=0, alpha=0.10, n_grid=51)
+print(f"Test-inversion 90% CI: [{ci_inv['ci_lo']:+.3f}, {ci_inv['ci_hi']:+.3f}]  "
+      f"(tau_hat = {ci_inv['tau_hat']:+.3f})")
+
 # %% [markdown]
 # ## 6. Phase III — Coverage simulation
 
