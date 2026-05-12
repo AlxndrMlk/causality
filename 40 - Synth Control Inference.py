@@ -461,5 +461,77 @@ print(f"Conformal      90% CI: [{ci_conf['ci_lo']:+.3f}, {ci_conf['ci_hi']:+.3f}
 # %% [markdown]
 # ## 6. Phase III — Coverage simulation
 
+# %%
+def _one_rep(rep_idx, taus, alpha, sim_kwargs, ci_kwargs):
+    """One MC rep across all taus. Reuses same factor draws across taus
+    (only the additive shift to the treated post-period changes)."""
+    rows = []
+    for tau in taus:
+        df, truth = simulate_panel(tau=tau, seed=rep_idx, **sim_kwargs)
+        T0 = truth["T0"]
+        treated_id = truth["treated_id"]
+
+        # Abadie p-value (one-sided, ratio-based)
+        gaps = placebo_distribution(df, T0=T0)
+        ratios = gaps.apply(lambda g: rmspe_ratio(g, T0=T0))
+        p_abadie = abadie_pvalue(ratios, treated_idx=treated_id)
+        rows.append(dict(rep=rep_idx, tau=tau, method="abadie_p",
+                         pvalue=p_abadie, ci_lo=np.nan, ci_hi=np.nan,
+                         covered=(p_abadie > alpha)))
+
+        # Test-inversion CI
+        ci_inv_r = test_inversion_ci(df, T0=T0, treated_id=treated_id,
+                                     alpha=alpha, **ci_kwargs)
+        rows.append(dict(rep=rep_idx, tau=tau, method="test_inversion",
+                         pvalue=np.nan,
+                         ci_lo=ci_inv_r["ci_lo"], ci_hi=ci_inv_r["ci_hi"],
+                         covered=(ci_inv_r["ci_lo"] <= tau <= ci_inv_r["ci_hi"])))
+
+        # Conformal CI
+        ci_conf_r = conformal_ci(df, T0=T0, treated_id=treated_id,
+                                 alpha=alpha, **ci_kwargs)
+        rows.append(dict(rep=rep_idx, tau=tau, method="conformal",
+                         pvalue=np.nan,
+                         ci_lo=ci_conf_r["ci_lo"], ci_hi=ci_conf_r["ci_hi"],
+                         covered=(ci_conf_r["ci_lo"] <= tau <= ci_conf_r["ci_hi"])))
+    return rows
+
+
+def coverage_sim(R=2000, taus=(0.0, 0.5, 1.0, 2.0), alpha=0.05, n_jobs=-1,
+                 sim_kwargs=None, ci_kwargs=None):
+    """Monte Carlo coverage simulation. Within each rep, the panel uses
+    seed=rep_idx and the same factor draws are reused across taus, so rows of
+    the result at different taus are paired.
+    """
+    sim_kwargs = sim_kwargs or dict(J=30, T=40, T0=30, r=2, sigma=0.5)
+    ci_kwargs = ci_kwargs or dict(n_grid=51)
+
+    results = Parallel(n_jobs=n_jobs)(
+        delayed(_one_rep)(rep, taus, alpha, sim_kwargs, ci_kwargs)
+        for rep in range(R)
+    )
+    flat = [row for rep_rows in results for row in rep_rows]
+    return pd.DataFrame(flat)
+
+
+# %% [markdown]
+# ### Validation: coverage_sim (small smoke run)
+
+# %%
+def _validate_coverage_sim():
+    out = coverage_sim(R=8, taus=(0.0, 1.0), alpha=0.10, n_jobs=1,
+                       sim_kwargs=dict(J=10, T=20, T0=15, sigma=0.3),
+                       ci_kwargs=dict(n_grid=11))
+    assert isinstance(out, pd.DataFrame)
+    expected_cols = {"rep", "tau", "method", "pvalue", "ci_lo", "ci_hi", "covered"}
+    assert expected_cols <= set(out.columns), out.columns.tolist()
+    assert set(out["method"].unique()) == {"abadie_p", "test_inversion", "conformal"}
+    assert len(out) == 8 * 2 * 3
+    ci_rows = out[out["method"].isin({"test_inversion", "conformal"})]
+    assert ci_rows["covered"].notna().all()
+    print("coverage_sim OK")
+
+_validate_coverage_sim()
+
 # %% [markdown]
 # ## 7. Discussion
